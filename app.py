@@ -205,48 +205,106 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 
 def ask_ai(prompt):
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"]
+    api_key = st.secrets["GEMINI_API_KEY"]
 
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/"
-            f"models/{GEMINI_MODEL}:generateContent"
-        )
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/"
+        f"models/{GEMINI_MODEL}:generateContent"
+    )
 
-        response = requests.post(
-            url,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": api_key
-            },
-            json={
-                "contents": [
+    request_data = {
+        "contents": [
+            {
+                "parts": [
                     {
-                        "parts": [
-                            {
-                                "text": prompt
-                            }
-                        ]
+                        "text": prompt
                     }
-                ],
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "maxOutputTokens": 2048
-                }
-            },
-            timeout=120
-        )
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 2048
+        }
+    }
 
-        response.raise_for_status()
+    last_error = None
 
-        result = response.json()
+    # Try up to 3 times if Gemini temporarily fails
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key
+                },
+                json=request_data,
+                timeout=120
+            )
 
-        return (
-            result["candidates"][0]["content"]["parts"][0]["text"]
-        ).strip()
+            # Retry temporary server or rate-limit errors
+            if response.status_code in [429, 500, 502, 503, 504]:
+                last_error = (
+                    f"Temporary Gemini error: "
+                    f"{response.status_code} - {response.text}"
+                )
 
-    except Exception as error:
-        raise Exception(f"Gemini API request failed: {error}")
+                if attempt < 2:
+                    import time
+                    time.sleep(2)
+                    continue
+
+                raise Exception(last_error)
+
+            response.raise_for_status()
+
+            result = response.json()
+
+            candidates = result.get("candidates", [])
+
+            if not candidates:
+                raise Exception(f"Gemini returned no answer: {result}")
+
+            answer = (
+                candidates[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+            )
+
+            if not answer.strip():
+                raise Exception(f"Gemini returned an empty answer: {result}")
+
+            return answer.strip()
+
+        except requests.exceptions.Timeout as error:
+            last_error = f"Gemini request timed out: {error}"
+
+            if attempt < 2:
+                import time
+                time.sleep(2)
+                continue
+
+            raise Exception(last_error)
+
+        except requests.exceptions.ConnectionError as error:
+            last_error = f"Network connection error: {error}"
+
+            if attempt < 2:
+                import time
+                time.sleep(2)
+                continue
+
+            raise Exception(last_error)
+
+        except requests.exceptions.RequestException as error:
+            raise Exception(f"Gemini API request failed: {error}")
+
+        except Exception:
+            raise
+
+    raise Exception(last_error or "Gemini request failed.")
 
 # =========================================================
 # PDF FUNCTION
