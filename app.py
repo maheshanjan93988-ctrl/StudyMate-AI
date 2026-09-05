@@ -200,14 +200,11 @@ with st.sidebar:
 # GEMINI AI CONNECTION
 # =========================================================
 
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 
 def ask_ai(prompt):
-
     try:
-
-        # Read the key from Streamlit Cloud Secrets
         api_key = st.secrets["GEMINI_API_KEY"]
 
         url = (
@@ -243,52 +240,12 @@ def ask_ai(prompt):
 
         result = response.json()
 
-        if "candidates" not in result:
-            raise Exception(f"Unexpected Gemini response: {result}")
-
-        candidates = result["candidates"]
-
-        if not candidates:
-            raise Exception("Gemini returned no answer.")
-
-        parts = candidates[0].get("content", {}).get("parts", [])
-
-        answer = "".join(
-            part.get("text", "")
-            for part in parts
+        return (
+            result["candidates"][0]["content"]["parts"][0]["text"]
         ).strip()
 
-        if not answer:
-            raise Exception("Gemini returned an empty answer.")
-
-        return answer
-
-    except KeyError:
-        raise Exception(
-            "GEMINI_API_KEY is missing. Add it in "
-            "Streamlit Cloud → Manage app → Settings → Secrets."
-        )
-
-    except requests.exceptions.Timeout:
-        raise Exception(
-            "Gemini took too long to respond. Please try again."
-        )
-
-    except requests.exceptions.HTTPError as error:
-
-        try:
-            error_details = response.json()
-        except Exception:
-            error_details = response.text
-
-        raise Exception(
-            f"Gemini API request failed: {error}. "
-            f"Details: {error_details}"
-        )
-
-    except requests.exceptions.RequestException as error:
-        raise Exception(f"Gemini connection failed: {error}")
-
+    except Exception as error:
+        raise Exception(f"Gemini API request failed: {error}")
 
 # =========================================================
 # PDF FUNCTION
