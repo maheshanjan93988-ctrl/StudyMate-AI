@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import json
+import re
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from io import BytesIO
@@ -18,23 +19,61 @@ st.set_page_config(
 
 
 # =========================================================
-# SESSION STATE
+# LOGIN PAGE
 # =========================================================
 
-default_values = {
-    "logged_in": False,
-    "chat_history": [],
-    "explanation": "",
-    "quiz_data": [],
-    "quiz_submitted": False,
-    "quiz_score": 0,
-    "plan": "",
-    "editing_message": None
-}
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-for key, value in default_values.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+if not st.session_state.logged_in:
+
+    st.markdown(
+        """
+        <style>
+        .login-title {
+            text-align: center;
+            color: #6366f1;
+            font-size: 38px;
+            font-weight: bold;
+            margin-top: 80px;
+        }
+
+        .login-subtitle {
+            text-align: center;
+            color: #777;
+            font-size: 18px;
+            margin-bottom: 30px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        '<div class="login-title">📚 StudyMate AI</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        '<div class="login-subtitle">Your personal AI learning assistant</div>',
+        unsafe_allow_html=True
+    )
+
+    st.subheader("🔐 Student Login")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login", use_container_width=True):
+
+        if username.strip() == "student" and password == "1234":
+            st.session_state.logged_in = True
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+
+    # Stop here so the main interface does not appear
+    st.stop()
 
 
 # =========================================================
@@ -89,46 +128,6 @@ st.markdown(
 
 
 # =========================================================
-# LOGIN PAGE
-# =========================================================
-
-USERNAME = "student"
-PASSWORD = "1234"
-
-# Create login state
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-
-# Show only the login page when the user is not logged in
-if not st.session_state.logged_in:
-
-    st.set_page_config(
-        page_title="StudyMate AI - Login",
-        page_icon="📚",
-        layout="centered"
-    )
-
-    st.title("📚 StudyMate AI")
-    st.subheader("Student Login")
-
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login", use_container_width=True):
-        if username.strip() == USERNAME and password == PASSWORD:
-            st.session_state.logged_in = True
-            st.rerun()
-        else:
-            st.error("Invalid username or password")
-
-    # IMPORTANT:
-    # Stop the remaining code from displaying on the login page
-    st.stop()
-
-
-    
-# =========================================================
 # HEADER
 # =========================================================
 
@@ -141,6 +140,25 @@ st.markdown(
     '<div class="app-subtitle">Learn smarter with your personal AI assistant</div>',
     unsafe_allow_html=True
 )
+
+
+# =========================================================
+# SESSION STATE
+# =========================================================
+
+default_values = {
+    "chat_history": [],
+    "explanation": "",
+    "quiz_data": [],
+    "quiz_submitted": False,
+    "quiz_score": 0,
+    "plan": "",
+    "editing_message": None
+}
+
+for key, value in default_values.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # =========================================================
@@ -167,69 +185,109 @@ with st.sidebar:
     st.write("Logged in as: **student**")
 
     if st.button("Logout", key="logout_button"):
-        st.session_state["logged_in"] = False
-        st.session_state["chat_history"] = []
-        st.session_state["editing_message"] = None
+        st.session_state.logged_in = False
         st.rerun()
 
     st.divider()
 
     if st.button("🗑️ Clear Chat", key="sidebar_clear_chat"):
-        st.session_state["chat_history"] = []
-        st.session_state["editing_message"] = None
+        st.session_state.chat_history = []
+        st.session_state.editing_message = None
         st.rerun()
 
 
 # =========================================================
-# OLLAMA CONNECTION
+# GEMINI AI CONNECTION
 # =========================================================
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3.2"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 
 def ask_ai(prompt):
-    """
-    Sends a prompt to the local Ollama model.
-    """
 
     try:
+
+        # Read the key from Streamlit Cloud Secrets
+        api_key = st.secrets["GEMINI_API_KEY"]
+
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{GEMINI_MODEL}:generateContent"
+        )
+
         response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": MODEL_NAME,
-                "prompt": prompt,
-                "stream": False
+            url,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key
             },
-            timeout=180
+            json={
+                "contents": [
+                    {
+                        "parts": [
+                            {
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": 2048
+                }
+            },
+            timeout=120
         )
 
         response.raise_for_status()
 
         result = response.json()
 
-        if "response" not in result:
-            raise Exception(
-                f"Unexpected Ollama response: {result}"
-            )
+        if "candidates" not in result:
+            raise Exception(f"Unexpected Gemini response: {result}")
 
-        return result["response"]
+        candidates = result["candidates"]
 
-    except requests.exceptions.ConnectionError:
+        if not candidates:
+            raise Exception("Gemini returned no answer.")
+
+        parts = candidates[0].get("content", {}).get("parts", [])
+
+        answer = "".join(
+            part.get("text", "")
+            for part in parts
+        ).strip()
+
+        if not answer:
+            raise Exception("Gemini returned an empty answer.")
+
+        return answer
+
+    except KeyError:
         raise Exception(
-            "Ollama is not running. Open another terminal and run:\n"
-            "ollama run llama3.2"
+            "GEMINI_API_KEY is missing. Add it in "
+            "Streamlit Cloud → Manage app → Settings → Secrets."
         )
 
     except requests.exceptions.Timeout:
         raise Exception(
-            "Ollama took too long to respond. Please try again."
+            "Gemini took too long to respond. Please try again."
+        )
+
+    except requests.exceptions.HTTPError as error:
+
+        try:
+            error_details = response.json()
+        except Exception:
+            error_details = response.text
+
+        raise Exception(
+            f"Gemini API request failed: {error}. "
+            f"Details: {error_details}"
         )
 
     except requests.exceptions.RequestException as error:
-        raise Exception(
-            f"Ollama request failed: {error}"
-        )
+        raise Exception(f"Gemini connection failed: {error}")
 
 
 # =========================================================
@@ -237,18 +295,12 @@ def ask_ai(prompt):
 # =========================================================
 
 def create_pdf(title, content):
-    """
-    Creates a simple PDF file from text.
-    """
 
     pdf_file = BytesIO()
 
-    pdf = canvas.Canvas(
-        pdf_file,
-        pagesize=A4
-    )
-
+    pdf = canvas.Canvas(pdf_file, pagesize=A4)
     width, height = A4
+
     y = height - 50
 
     pdf.setFont("Helvetica-Bold", 16)
@@ -264,7 +316,6 @@ def create_pdf(title, content):
             pdf.setFont("Helvetica", 11)
             y = height - 50
 
-        # Avoid very long lines going outside the PDF page
         pdf.drawString(50, y, line[:100])
         y -= 16
 
@@ -275,7 +326,7 @@ def create_pdf(title, content):
 
 
 # =========================================================
-# USER INPUT
+# USER INPUTS
 # =========================================================
 
 topic = st.text_input(
@@ -284,12 +335,17 @@ topic = st.text_input(
 )
 
 st.markdown(
-    """
-    <div class="info-card">
-    Choose a topic and use the tabs to learn, practice, and ask questions.
-    </div>
-    """,
+    '<div class="info-card">Choose a topic and use the tabs to learn, practice, and ask questions.</div>',
     unsafe_allow_html=True
+)
+
+
+# =========================================================
+# FEATURE TABS
+# =========================================================
+
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["📖 Explain", "📝 Quiz", "📅 Study Plan", "💬 Ask AI"]
 )
 
 
@@ -314,20 +370,6 @@ Use simple and clear language.
 
 
 # =========================================================
-# FEATURE TABS
-# =========================================================
-
-tab1, tab2, tab3, tab4 = st.tabs(
-    [
-        "📖 Explain",
-        "📝 Quiz",
-        "📅 Study Plan",
-        "💬 Ask AI"
-    ]
-)
-
-
-# =========================================================
 # EXPLANATION TAB
 # =========================================================
 
@@ -336,7 +378,6 @@ with tab1:
     if st.button("📖 Explain Topic", key="explain_button"):
 
         if not topic.strip():
-
             st.warning("Please enter a topic first.")
 
         else:
@@ -366,22 +407,20 @@ Use headings and bullet points.
 """
                     )
 
-                    st.session_state["explanation"] = explanation
+                    st.session_state.explanation = explanation
 
                 except Exception as error:
 
                     st.error("The AI request failed.")
                     st.code(str(error))
 
-    if st.session_state["explanation"]:
+    if st.session_state.explanation:
 
-        st.markdown(
-            st.session_state["explanation"]
-        )
+        st.markdown(st.session_state.explanation)
 
         st.download_button(
             label="⬇️ Download Explanation",
-            data=st.session_state["explanation"],
+            data=st.session_state.explanation,
             file_name="explanation.txt",
             mime="text/plain",
             key="download_explanation"
@@ -389,7 +428,7 @@ Use headings and bullet points.
 
         pdf = create_pdf(
             f"StudyMate AI - {topic}",
-            st.session_state["explanation"]
+            st.session_state.explanation
         )
 
         st.download_button(
@@ -417,7 +456,6 @@ with tab2:
     if st.button("📝 Generate Quiz", key="quiz_button"):
 
         if not topic.strip():
-
             st.warning("Please enter a topic first.")
 
         else:
@@ -440,12 +478,7 @@ Return ONLY valid JSON in this format:
 [
   {{
     "question": "Question text",
-    "options": [
-      "Option A",
-      "Option B",
-      "Option C",
-      "Option D"
-    ],
+    "options": ["Option A", "Option B", "Option C", "Option D"],
     "answer": 0,
     "explanation": "Short explanation"
   }}
@@ -458,79 +491,74 @@ The answer must be the option number:
 3 for D
 """
 
-                    quiz_response = ask_ai(
-                        quiz_prompt
+                    quiz_response = ask_ai(quiz_prompt)
+
+                    # Remove Markdown code fences if Gemini adds them
+                    quiz_response = quiz_response.replace(
+                        "```json", ""
+                    ).replace("```", "").strip()
+
+                    # Extract JSON array if extra text is returned
+                    match = re.search(
+                        r"\[.*\]",
+                        quiz_response,
+                        re.DOTALL
                     )
 
-                    # Remove Markdown code fences if Ollama adds them
-                    quiz_response = (
-                        quiz_response
-                        .replace("```json", "")
-                        .replace("```", "")
-                        .strip()
-                    )
+                    if match:
+                        quiz_response = match.group(0)
 
-                    quiz_data = json.loads(
-                        quiz_response
-                    )
+                    quiz_data = json.loads(quiz_response)
 
-                    # Basic validation
                     if not isinstance(quiz_data, list):
-                        raise Exception(
-                            "Quiz response is not a list."
-                        )
+                        raise Exception("Quiz response is not a JSON list.")
 
-                    for question in quiz_data:
+                    for question_data in quiz_data:
 
-                        if (
-                            "question" not in question
-                            or "options" not in question
-                            or "answer" not in question
-                            or "explanation" not in question
+                        if not all(
+                            key in question_data
+                            for key in [
+                                "question",
+                                "options",
+                                "answer",
+                                "explanation"
+                            ]
                         ):
                             raise Exception(
                                 "Quiz response has an invalid format."
                             )
 
-                        if len(question["options"]) != 4:
+                        if len(question_data["options"]) != 4:
                             raise Exception(
                                 "Each question must have four options."
                             )
 
-                        if question["answer"] not in [0, 1, 2, 3]:
+                        if question_data["answer"] not in [0, 1, 2, 3]:
                             raise Exception(
-                                "Answer must be 0, 1, 2, or 3."
+                                "Quiz answer must be 0, 1, 2, or 3."
                             )
 
-                    st.session_state["quiz_data"] = quiz_data
-                    st.session_state["quiz_submitted"] = False
-                    st.session_state["quiz_score"] = 0
-
-                except json.JSONDecodeError:
-
-                    st.error(
-                        "The AI did not return valid quiz JSON. "
-                        "Please generate the quiz again."
-                    )
+                    st.session_state.quiz_data = quiz_data
+                    st.session_state.quiz_submitted = False
+                    st.session_state.quiz_score = 0
 
                 except Exception as error:
 
                     st.error("Quiz generation failed.")
                     st.code(str(error))
 
-    if st.session_state["quiz_data"]:
+    if st.session_state.quiz_data:
 
         st.subheader("📝 Answer the questions")
 
         selected_answers = []
 
         for index, question_data in enumerate(
-            st.session_state["quiz_data"]
+            st.session_state.quiz_data
         ):
 
             st.write(
-                f"**{index + 1}. "
-                f"{question_data['question']}**"
+                f"**{index + 1}. {question_data['question']}**"
             )
 
             selected = st.radio(
@@ -539,41 +567,29 @@ The answer must be the option number:
                 key=f"quiz_question_{index}"
             )
 
-            selected_index = (
-                question_data["options"].index(selected)
-            )
+            selected_index = question_data["options"].index(selected)
 
-            selected_answers.append(
-                selected_index
-            )
+            selected_answers.append(selected_index)
 
-        if st.button(
-            "✅ Submit Quiz",
-            key="submit_quiz"
-        ):
+        if st.button("✅ Submit Quiz", key="submit_quiz"):
 
             score = 0
 
             for index, question_data in enumerate(
-                st.session_state["quiz_data"]
+                st.session_state.quiz_data
             ):
 
-                correct_answer = question_data["answer"]
-
-                if selected_answers[index] == correct_answer:
+                if selected_answers[index] == question_data["answer"]:
                     score += 1
 
-            st.session_state["quiz_score"] = score
-            st.session_state["quiz_submitted"] = True
+            st.session_state.quiz_score = score
+            st.session_state.quiz_submitted = True
             st.rerun()
 
-        if st.session_state["quiz_submitted"]:
+        if st.session_state.quiz_submitted:
 
-            total = len(
-                st.session_state["quiz_data"]
-            )
-
-            score = st.session_state["quiz_score"]
+            total = len(st.session_state.quiz_data)
+            score = st.session_state.quiz_score
             percentage = (score / total) * 100
 
             st.success(
@@ -582,23 +598,18 @@ The answer must be the option number:
             )
 
             for index, question_data in enumerate(
-                st.session_state["quiz_data"]
+                st.session_state.quiz_data
             ):
 
                 correct_index = question_data["answer"]
-
-                correct_option = (
-                    question_data["options"][correct_index]
-                )
+                correct_option = question_data["options"][correct_index]
 
                 st.write(
                     f"**Question {index + 1} correct answer:** "
                     f"{correct_option}"
                 )
 
-                st.caption(
-                    question_data["explanation"]
-                )
+                st.caption(question_data["explanation"])
 
 
 # =========================================================
@@ -614,13 +625,9 @@ with tab3:
         value=7
     )
 
-    if st.button(
-        "📅 Create Study Plan",
-        key="plan_button"
-    ):
+    if st.button("📅 Create Study Plan", key="plan_button"):
 
         if not topic.strip():
-
             st.warning("Please enter a topic first.")
 
         else:
@@ -647,25 +654,20 @@ Keep the plan realistic for a college student.
 """
                     )
 
-                    st.session_state["plan"] = plan
+                    st.session_state.plan = plan
 
                 except Exception as error:
 
-                    st.error(
-                        "The study-plan request failed."
-                    )
-
+                    st.error("The study-plan request failed.")
                     st.code(str(error))
 
-    if st.session_state["plan"]:
+    if st.session_state.plan:
 
-        st.markdown(
-            st.session_state["plan"]
-        )
+        st.markdown(st.session_state.plan)
 
         st.download_button(
             label="⬇️ Download Study Plan",
-            data=st.session_state["plan"],
+            data=st.session_state.plan,
             file_name="study_plan.txt",
             mime="text/plain",
             key="download_plan"
@@ -683,8 +685,7 @@ with tab4:
     )
 
     st.write(
-        "You can ask questions in English or Telugu "
-        "depending on your selected language."
+        "You can ask questions in English or Telugu depending on your selected language."
     )
 
 
@@ -696,47 +697,22 @@ st.divider()
 st.subheader("💬 Continue learning")
 
 for index, message in enumerate(
-    st.session_state["chat_history"]
+    st.session_state.chat_history
 ):
 
     with st.chat_message(message["role"]):
 
-        st.markdown(
-            message["content"]
-        )
+        st.markdown(message["content"])
 
         if message["role"] == "assistant":
 
-            col1, col2 = st.columns(2)
-
-            with col1:
-
-                st.download_button(
-                    label="💾 Save Answer",
-                    data=message["content"],
-                    file_name=f"answer_{index + 1}.txt",
-                    mime="text/plain",
-                    key=f"save_answer_{index}"
-                )
-
-            with col2:
-
-                if st.button(
-                    "🔗 Share Prompt",
-                    key=f"share_prompt_{index}"
-                ):
-
-                    st.info(
-                        "Copy the question below and share it "
-                        "with others:"
-                    )
-
-                    st.code(
-                        message.get(
-                            "question",
-                            "Question not available"
-                        )
-                    )
+            st.download_button(
+                label="⬇️ Save Answer",
+                data=message["content"],
+                file_name=f"answer_{index + 1}.txt",
+                mime="text/plain",
+                key=f"save_answer_{index}"
+            )
 
         elif message["role"] == "user":
 
@@ -745,7 +721,7 @@ for index, message in enumerate(
                 key=f"edit_question_{index}"
             ):
 
-                st.session_state["editing_message"] = index
+                st.session_state.editing_message = index
                 st.rerun()
 
 
@@ -753,23 +729,19 @@ for index, message in enumerate(
 # EDIT PREVIOUS QUESTION
 # =========================================================
 
-if st.session_state["editing_message"] is not None:
+if st.session_state.editing_message is not None:
 
-    edit_index = st.session_state["editing_message"]
+    edit_index = st.session_state.editing_message
 
-    selected_message = (
-        st.session_state["chat_history"][edit_index]
-    )
-
-    old_question = selected_message.get(
+    old_question = st.session_state.chat_history[edit_index].get(
         "question",
-        selected_message["content"]
+        st.session_state.chat_history[edit_index]["content"]
     )
 
     st.subheader("✏️ Edit your question")
 
     edited_question = st.text_area(
-        "Correct only the wrong text:",
+        "Correct your question here:",
         value=old_question,
         key="edited_question_text"
     )
@@ -779,27 +751,22 @@ if st.session_state["editing_message"] is not None:
     with col1:
 
         if st.button(
-            "🚀 Send Edited Question",
+            "Send Edited Question",
             key="send_edited_question"
         ):
 
-            edited_question = edited_question.strip()
+            if not edited_question.strip():
 
-            if not edited_question:
-
-                st.warning(
-                    "Please enter a question."
-                )
+                st.warning("Please enter a question.")
 
             else:
 
-                # Remove the selected question and all messages
-                # after it, then create a new conversation branch.
-                st.session_state["chat_history"] = (
-                    st.session_state["chat_history"][:edit_index]
+                # Remove the old question and later messages
+                st.session_state.chat_history = (
+                    st.session_state.chat_history[:edit_index]
                 )
 
-                st.session_state["chat_history"].append(
+                st.session_state.chat_history.append(
                     {
                         "role": "user",
                         "content": edited_question,
@@ -807,24 +774,26 @@ if st.session_state["editing_message"] is not None:
                     }
                 )
 
-                conversation_text = ""
-
-                for message in st.session_state["chat_history"]:
-
-                    conversation_text += (
-                        f'{message["role"].capitalize()}: '
-                        f'{message["content"]}\n'
-                    )
+                st.session_state.editing_message = None
 
                 with st.spinner("Thinking..."):
 
                     try:
 
+                        conversation_text = ""
+
+                        for message in st.session_state.chat_history:
+
+                            conversation_text += (
+                                f'{message["role"].capitalize()}: '
+                                f'{message["content"]}\n'
+                            )
+
                         answer = ask_ai(
                             f"""
 You are StudyMate AI.
 
-Current topic: {topic}
+Topic: {topic}
 Student level: {level}
 
 {language_instruction}
@@ -832,16 +801,15 @@ Student level: {level}
 Previous conversation:
 {conversation_text}
 
-Latest student question:
+Latest question:
 {edited_question}
 
 Answer clearly and simply.
-Connect the answer with the previous conversation.
 Use examples when useful.
 """
                         )
 
-                        st.session_state["chat_history"].append(
+                        st.session_state.chat_history.append(
                             {
                                 "role": "assistant",
                                 "content": answer,
@@ -849,25 +817,18 @@ Use examples when useful.
                             }
                         )
 
-                        st.session_state["editing_message"] = None
                         st.rerun()
 
                     except Exception as error:
 
-                        st.error(
-                            "The AI request failed."
-                        )
-
+                        st.error("The AI request failed.")
                         st.code(str(error))
 
     with col2:
 
-        if st.button(
-            "❌ Cancel Edit",
-            key="cancel_edit"
-        ):
+        if st.button("Cancel Edit", key="cancel_edit"):
 
-            st.session_state["editing_message"] = None
+            st.session_state.editing_message = None
             st.rerun()
 
 
@@ -883,14 +844,11 @@ if user_message:
 
     if not topic.strip():
 
-        st.warning(
-            "Please enter a topic first."
-        )
+        st.warning("Please enter a topic first.")
 
     else:
 
-        # Save the user's question
-        st.session_state["chat_history"].append(
+        st.session_state.chat_history.append(
             {
                 "role": "user",
                 "content": user_message,
@@ -900,7 +858,7 @@ if user_message:
 
         conversation_text = ""
 
-        for message in st.session_state["chat_history"]:
+        for message in st.session_state.chat_history:
 
             conversation_text += (
                 f'{message["role"].capitalize()}: '
@@ -932,7 +890,7 @@ Use examples when useful.
 """
                 )
 
-                st.session_state["chat_history"].append(
+                st.session_state.chat_history.append(
                     {
                         "role": "assistant",
                         "content": answer,
@@ -944,8 +902,5 @@ Use examples when useful.
 
             except Exception as error:
 
-                st.error(
-                    "The AI request failed."
-                )
-
+                st.error("The AI request failed.")
                 st.code(str(error))
